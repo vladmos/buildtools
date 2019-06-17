@@ -251,11 +251,10 @@ func makeKeyword(argument build.Expr, name string) build.Expr {
 	return argument
 }
 
-func attrConfigurationWarning(f *build.File) []*LinterFinding {
-	findings := []*LinterFinding{}
-
+func attrConfigurationWarning(f *build.File, findings chan *LinterFinding) {
+	defer close(findings)
 	if f.Type != build.TypeBzl {
-		return nil
+		return
 	}
 
 	build.WalkPointers(f, func(expr *build.Expr, stack []build.Expr) {
@@ -283,11 +282,9 @@ func attrConfigurationWarning(f *build.File) []*LinterFinding {
 		newCall := *call
 		newCall.List = append(newCall.List[:i], newCall.List[i+1:]...)
 
-		findings = append(findings,
-			makeLinterFinding(param, `cfg = "data" for attr definitions has no effect and should be removed.`,
-				LinterReplacement{expr, &newCall}))
+		findings <- makeLinterFinding(param, `cfg = "data" for attr definitions has no effect and should be removed.`,
+			LinterReplacement{expr, &newCall})
 	})
-	return findings
 }
 
 func attrNonEmptyWarning(f *build.File, fix bool) []*Finding {
@@ -647,12 +644,12 @@ func attrOutputDefaultWarning(f *build.File, fix bool) []*Finding {
 	return findings
 }
 
-func attrLicenseWarning(f *build.File) []*LinterFinding {
+func attrLicenseWarning(f *build.File, findings chan *LinterFinding) {
+	defer close(findings)
 	if f.Type != build.TypeBzl {
-		return nil
+		return
 	}
 
-	findings := []*LinterFinding{}
 	build.Walk(f, func(expr build.Expr, stack []build.Expr) {
 		// Find nodes that match the following pattern: attr.license(...)
 		call, ok := expr.(*build.CallExpr)
@@ -667,10 +664,8 @@ func attrLicenseWarning(f *build.File) []*LinterFinding {
 		if !ok || base.Name != "attr" {
 			return
 		}
-		findings = append(findings,
-			makeLinterFinding(expr, `"attr.license()" is deprecated and shouldn't be used.`))
+		findings <- makeLinterFinding(expr, `"attr.license()" is deprecated and shouldn't be used.`)
 	})
-	return findings
 }
 
 // ruleImplReturnWarning checks whether a rule implementation function returns an old-style struct

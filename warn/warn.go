@@ -93,7 +93,7 @@ func makeLinterFinding(node build.Expr, message string, replacement ...LinterRep
 var RuleWarningMap = map[string]func(f *build.File, pkg string, expr build.Expr) *Finding{}
 
 // FileWarningMap lists the warnings that run on the whole file.
-var FileWarningMap = map[string]func(f *build.File) []*LinterFinding{
+var FileWarningMap = map[string]func(f *build.File, findings chan *LinterFinding){
 	"attr-cfg":          attrConfigurationWarning,
 	"attr-license":      attrLicenseWarning,
 	"build-args-kwargs": argsKwargsInBuildFilesWarning,
@@ -155,24 +155,23 @@ var nonDefaultWarnings = map[string]bool{
 
 // RuleWarning is a wrapper that converts a per-rule function to a per-file function. It also doesn't
 // run on .bzl of default files.
-func RuleWarning(ruleWarning func(call *build.CallExpr) []*LinterFinding) func(f *build.File) []*LinterFinding {
-	return func(f *build.File) []*LinterFinding {
+func RuleWarning(ruleWarning func(call *build.CallExpr, findings chan *LinterFinding)) func(f *build.File, findings chan *LinterFinding) {
+	return func(f *build.File, findings chan *LinterFinding) {
+		defer close(findings)
 		if f.Type != build.TypeBuild && f.Type != build.TypeWorkspace {
-			return nil
+			return
 		}
-		findings := []*LinterFinding{}
 		for _, stmt := range f.Stmt {
 			switch stmt := stmt.(type) {
 			case *build.CallExpr:
-				findings = append(findings, ruleWarning(stmt)...)
+				ruleWarning(stmt, findings)
 			case *build.Comprehension:
 				// Rules are often called within list comprehensions, e.g. [my_rule(foo) for foo in bar]
 				if call, ok := stmt.Body.(*build.CallExpr); ok {
-					findings = append(findings, ruleWarning(call)...)
+					ruleWarning(call, findings)
 				}
 			}
 		}
-		return findings
 	}
 }
 
@@ -264,9 +263,11 @@ func FileWarnings(f *build.File, pkg string, enabledWarnings []string, formatted
 }
 
 // runFileWarningsFunction runs a linter/fixer function over a file and applies the fixes conditionally
-func runFileWarningsFunction(category string, f *build.File, fct func(f *build.File) []*LinterFinding, formatted *[]byte, mode LintMode) []*Finding {
+func runFileWarningsFunction(category string, f *build.File, fct func(f *build.File, findings chan *LinterFinding), formatted *[]byte, mode LintMode) []*Finding {
 	findings := []*Finding{}
-	for _, w := range fct(f) {
+	findingsChan := make(chan *LinterFinding)
+	go fct(f, findingsChan)
+	for w := range findingsChan {
 		if !DisabledWarning(f, w.Start.Line, category) {
 			finding := makeFinding(f, w.Start, w.End, category, w.Message, true, nil)
 			if len(w.Replacement) > 0 {
